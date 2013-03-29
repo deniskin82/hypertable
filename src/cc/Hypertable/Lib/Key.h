@@ -1,0 +1,168 @@
+/** -*- c++ -*-
+ * Copyright (C) 2007-2012 Hypertable, Inc.
+ *
+ * This file is part of Hypertable.
+ *
+ * Hypertable is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; version 3 of the
+ * License, or any later version.
+ *
+ * Hypertable is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA.
+ */
+
+#ifndef HYPERTABLE_KEY_H
+#define HYPERTABLE_KEY_H
+
+#include <iostream>
+
+#include <boost/shared_array.hpp>
+#include <boost/detail/endian.hpp>
+
+#include "Common/ByteString.h"
+#include "Common/DynamicBuffer.h"
+
+#include "KeySpec.h"
+#include "SerializedKey.h"
+
+
+namespace Hypertable {
+  /** Provides access to internal components of opaque key.
+   */
+  class Key {
+  public:
+
+    static const uint8_t HAVE_REVISION      =  0x80;
+    static const uint8_t HAVE_TIMESTAMP     =  0x40;
+    static const uint8_t AUTO_TIMESTAMP     =  0x20;
+    static const uint8_t REV_IS_TS          =  0x10;
+    static const uint8_t TS_CHRONOLOGICAL   =   0x1;
+
+    static const char *END_ROW_MARKER;
+    static const char *END_ROOT_ROW;
+
+    static inline void encode_ts64(uint8_t **bufp, int64_t val,
+            bool ascending=true) {
+      if (ascending)
+        val = ~val;
+#ifdef HT_LITTLE_ENDIAN
+      *(*bufp)++ = (uint8_t)(val >> 56);
+      *(*bufp)++ = (uint8_t)(val >> 48);
+      *(*bufp)++ = (uint8_t)(val >> 40);
+      *(*bufp)++ = (uint8_t)(val >> 32);
+      *(*bufp)++ = (uint8_t)(val >> 24);
+      *(*bufp)++ = (uint8_t)(val >> 16);
+      *(*bufp)++ = (uint8_t)(val >> 8);
+      *(*bufp)++ = (uint8_t)val;
+#else
+      memcpy(*bufp, &val, 8);
+      *bufp += 8;
+#endif
+    }
+
+    static inline int64_t decode_ts64(const uint8_t **bufp, 
+            bool ascending=true) {
+      int64_t val;
+#ifdef HT_LITTLE_ENDIAN
+      val = ((int64_t)*(*bufp)++ << 56);
+      val |= ((int64_t)(*(*bufp)++) << 48);
+      val |= ((int64_t)(*(*bufp)++) << 40);
+      val |= ((int64_t)(*(*bufp)++) << 32);
+      val |= ((int64_t)(*(*bufp)++) << 24);
+      val |= (*(*bufp)++ << 16);
+      val |= (*(*bufp)++ << 8);
+      val |= *(*bufp)++;
+#else
+      memcpy(&val, *bufp, 8);
+      *bufp += 8;
+#endif
+      return (ascending ? ~val : val);
+    }
+
+    /**
+     * Constructor (for implicit construction).
+     */
+    Key() : flag(FLAG_INSERT), column_family_code(0), row_key_set(false),
+            row(0), column_qualifier(0), row_len(0), column_qualifier_len(0),
+            timestamp(0), revision(AUTO_ASSIGN){ }
+
+    /**
+     * Constructor that takes an opaque key as an argument.  load is called to
+     * load the object with the key's components.
+     *
+     * @param key the opaque key
+     */
+    Key(SerializedKey key);
+
+    /**
+     * Parses the opaque key and loads the components into the member variables
+     *
+     * @param key the opaque key
+     * @return true on success, false otherwise
+     */
+    bool load(SerializedKey key);
+
+    size_t len_row() const { return row_len; }
+
+    size_t len_column_family() const {
+      return(column_qualifier - row);
+    }
+
+    size_t len_cell() const {
+      return (column_qualifier - row) + column_qualifier_len;
+    }
+
+    SerializedKey  serial;
+    uint32_t       length;  // length of serialized key
+    uint8_t        flag;
+    uint8_t        control;
+    uint8_t        column_family_code;
+    bool           row_key_set;
+    const char    *row;
+    const char    *column_qualifier;
+    uint32_t       row_len;                     // excluding null byte
+    uint32_t       column_qualifier_len;        // ditto
+    const uint8_t *flag_ptr;
+    int64_t        timestamp;
+    int64_t        revision;
+  };
+
+
+  /**
+   * Prints a one-line representation of the key to the given ostream.
+   *
+   * @param os output stream to print key to
+   * @param key the key to print
+   * @return the output stream
+   */
+  std::ostream &operator<<(std::ostream &os, const Key &key);
+
+  /**
+   * Prints a one-line representation of the key to the given ostream.
+   */
+  inline std::ostream &
+  operator<<(std::ostream &os, const SerializedKey &serkey) {
+    Key key(serkey);
+    os << key;
+    return os;
+  }
+
+  void create_key_and_append(DynamicBuffer &dst_buf, const char *row);
+
+  void create_key_and_append(DynamicBuffer &dst_buf, uint8_t flag,
+                             const char *row, uint8_t column_family_code,
+                             const char *column_qualifier,
+                             int64_t timestamp = AUTO_ASSIGN,
+                             int64_t revision = AUTO_ASSIGN);
+
+} // namespace Hypertable
+
+#endif // HYPERTABLE_KEY_H
